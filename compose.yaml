@@ -1,0 +1,65 @@
+x-service: &service
+  build: .
+  environment: &environment
+    DATABASE_URL: postgresql+psycopg://taskhub:local-development-only@db:5432/taskhub
+    REDIS_URL: redis://redis:6379/0
+    AI_PROVIDER: ${AI_PROVIDER:-demo}
+    LLM_API_KEY: ${LLM_API_KEY:-}
+    LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+    LLM_MODEL: ${LLM_MODEL:-gpt-4.1-mini}
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: taskhub
+      POSTGRES_PASSWORD: local-development-only
+      POSTGRES_DB: taskhub
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskhub"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  init:
+    <<: *service
+    command: ["python", "-m", "app.cli", "init-db"]
+  api:
+    <<: *service
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+  dispatcher:
+    <<: *service
+    command: ["python", "-m", "app.dispatcher"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+  worker:
+    <<: *service
+    command: ["rq", "worker", "--url", "redis://redis:6379/0", "--serializer", "json", "ai-tasks"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+volumes:
+  postgres_data:
+  redis_data:
